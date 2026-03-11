@@ -488,5 +488,18 @@ class StorageService {
 	}
 }
 
-export const storageService = new StorageService();
+const USE_SERVER_STORAGE =
+	typeof window !== "undefined" &&
+	typeof process !== "undefined" &&
+	process.env.NEXT_PUBLIC_USE_SERVER_STORAGE === "true";
+
+function createStorageService(): StorageService {
+	if (USE_SERVER_STORAGE) {
+		const { ServerStorageService } = require("./server-storage-service") as typeof import("./server-storage-service");
+		return new ServerStorageService() as unknown as StorageService;
+	}
+	return new StorageService();
+}
+
+export const storageService = createStorageService();
 export { StorageService };
