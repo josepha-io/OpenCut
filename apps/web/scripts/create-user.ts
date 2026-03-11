@@ -15,12 +15,12 @@ function getArg(flag: string): string | undefined {
 	return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : undefined;
 }
 
-const email = getArg("--email");
-const name = getArg("--name");
-const password = getArg("--password");
-const role = getArg("--role") ?? "user";
+const emailArg = getArg("--email");
+const nameArg = getArg("--name");
+const passwordArg = getArg("--password");
+const roleArg = getArg("--role") ?? "user";
 
-if (!email || !name || !password) {
+if (!emailArg || !nameArg || !passwordArg) {
 	console.error(
 		"Usage: bunx tsx scripts/create-user.ts --email <email> --name <name> --password <password> [--role admin|user]",
 	);
@@ -31,13 +31,13 @@ async function main() {
 	const { auth } = await import("../src/lib/auth/server");
 
 	const ctx = await auth.$context;
-	const hashedPassword = await ctx.password.hash(password!);
+	const hashedPassword = await ctx.password.hash(passwordArg!);
 
 	const user = await ctx.internalAdapter.createUser({
-		email: email!,
-		name: name!,
+		email: emailArg!,
+		name: nameArg!,
 		emailVerified: true,
-		role,
+		role: roleArg,
 	});
 
 	if (!user) {
@@ -54,9 +54,9 @@ async function main() {
 
 	console.log("User created successfully:");
 	console.log(`  ID:    ${user.id}`);
-	console.log(`  Name:  ${name}`);
-	console.log(`  Email: ${email}`);
-	console.log(`  Role:  ${role}`);
+	console.log(`  Name:  ${nameArg}`);
+	console.log(`  Email: ${emailArg}`);
+	console.log(`  Role:  ${roleArg}`);
 
 	process.exit(0);
 }

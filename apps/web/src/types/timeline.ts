@@ -102,6 +102,7 @@ export interface VideoElement extends BaseTimelineElement {
 	mediaId: string;
 	muted?: boolean;
 	hidden?: boolean;
+	playbackSpeed?: number;
 	transform: Transform;
 	opacity: number;
 	blendMode?: BlendMode;

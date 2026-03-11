@@ -257,6 +257,7 @@ export function buildVideoElement({
 		sourceDuration: duration,
 		muted: false,
 		hidden: false,
+		playbackSpeed: 1,
 		transform: { ...DEFAULT_TRANSFORM },
 		opacity: DEFAULT_OPACITY,
 		blendMode: DEFAULT_BLEND_MODE,
