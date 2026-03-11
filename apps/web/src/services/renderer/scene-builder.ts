@@ -75,6 +75,7 @@ function buildTrackNodes({
 							timeOffset: element.startTime,
 							trimStart: element.trimStart,
 							trimEnd: element.trimEnd,
+							playbackSpeed: element.type === "video" ? element.playbackSpeed : undefined,
 							transform: element.transform,
 							animations: element.animations,
 							opacity: element.opacity,

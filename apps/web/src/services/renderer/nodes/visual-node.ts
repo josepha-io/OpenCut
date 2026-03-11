@@ -20,6 +20,7 @@ export interface VisualNodeParams {
 	timeOffset: number;
 	trimStart: number;
 	trimEnd: number;
+	playbackSpeed?: number;
 	transform: Transform;
 	animations?: ElementAnimations;
 	opacity: number;
@@ -31,7 +32,9 @@ export abstract class VisualNode<
 	Params extends VisualNodeParams = VisualNodeParams,
 > extends BaseNode<Params> {
 	protected getSourceLocalTime({ time }: { time: number }): number {
-		return time - this.params.timeOffset + this.params.trimStart;
+		const localTime = time - this.params.timeOffset;
+		const speed = this.params.playbackSpeed ?? 1;
+		return localTime * speed + this.params.trimStart;
 	}
 
 	protected getAnimationLocalTime({ time }: { time: number }): number {
@@ -43,10 +46,12 @@ export abstract class VisualNode<
 	}
 
 	protected isInRange({ time }: { time: number }): boolean {
-		const localTime = this.getSourceLocalTime({ time });
+		const sourceTime = this.getSourceLocalTime({ time });
+		const speed = this.params.playbackSpeed ?? 1;
+		const sourceDuration = this.params.duration * speed;
 		return (
-			localTime >= this.params.trimStart - TIME_EPSILON_SECONDS &&
-			localTime < this.params.trimStart + this.params.duration
+			sourceTime >= this.params.trimStart - TIME_EPSILON_SECONDS &&
+			sourceTime < this.params.trimStart + sourceDuration
 		);
 	}
 
