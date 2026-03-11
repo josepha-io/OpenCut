@@ -1,5 +1,6 @@
 import { betterAuth, type RateLimit } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { admin } from "better-auth/plugins";
 import { Redis } from "@upstash/redis";
 import { db } from "@/lib/db";
 import { webEnv } from "@opencut/env/web";
@@ -22,6 +23,7 @@ export const auth = betterAuth({
 	},
 	emailAndPassword: {
 		enabled: true,
+		disableSignUp: true,
 	},
 	rateLimit: {
 		storage: "secondary-storage",
@@ -38,6 +40,7 @@ export const auth = betterAuth({
 	baseURL: webEnv.NEXT_PUBLIC_SITE_URL,
 	appName: "OpenCut",
 	trustedOrigins: [webEnv.NEXT_PUBLIC_SITE_URL],
+	plugins: [admin()],
 });
 
 export type Auth = typeof auth;
