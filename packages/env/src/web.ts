@@ -27,6 +27,10 @@ const webEnvSchema = z.object({
 	R2_SECRET_ACCESS_KEY: z.string(),
 	R2_BUCKET_NAME: z.string(),
 	MODAL_TRANSCRIPTION_URL: z.url(),
+
+	// GCS Storage (optional — only needed for server-side project storage)
+	GCS_BUCKET_NAME: z.string().optional(),
+	GOOGLE_APPLICATION_CREDENTIALS: z.string().optional(),
 });
 
 export type WebEnv = z.infer<typeof webEnvSchema>;

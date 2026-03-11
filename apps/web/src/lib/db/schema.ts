@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, jsonb, integer } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
 	id: text("id").primaryKey(),
@@ -13,6 +13,7 @@ export const users = pgTable("users", {
 	banned: boolean("banned").default(false),
 	banReason: text("ban_reason"),
 	banExpires: timestamp("ban_expires"),
+	airtableCutterId: text("airtable_cutter_id"),
 	createdAt: timestamp("created_at")
 		.$defaultFn(() => /* @__PURE__ */ new Date())
 		.notNull(),
@@ -51,6 +52,42 @@ export const accounts = pgTable("accounts", {
 	password: text("password"),
 	createdAt: timestamp("created_at").notNull(),
 	updatedAt: timestamp("updated_at").notNull(),
+}).enableRLS();
+
+export const projects = pgTable("projects", {
+	id: text("id").primaryKey(),
+	name: text("name").notNull(),
+	status: text("status").notNull().default("todo"),
+	assignedUserId: text("assigned_user_id").references(() => users.id, {
+		onDelete: "set null",
+	}),
+	thumbnail: text("thumbnail"),
+	duration: integer("duration").default(0).notNull(),
+	data: jsonb("data").notNull(),
+	createdAt: timestamp("created_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+	updatedAt: timestamp("updated_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+}).enableRLS();
+
+export const projectMedia = pgTable("project_media", {
+	id: text("id").primaryKey(),
+	projectId: text("project_id")
+		.notNull()
+		.references(() => projects.id, { onDelete: "cascade" }),
+	name: text("name").notNull(),
+	type: text("type").notNull(),
+	size: integer("size").notNull().default(0),
+	width: integer("width"),
+	height: integer("height"),
+	duration: integer("media_duration"),
+	fps: integer("fps"),
+	gcsPath: text("gcs_path"),
+	createdAt: timestamp("created_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
 }).enableRLS();
 
 export const verifications = pgTable("verifications", {
