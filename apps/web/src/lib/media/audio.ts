@@ -16,7 +16,7 @@ const EXPORT_SAMPLE_RATE = 44100;
 export type CollectedAudioElement = Omit<
 	AudioElement,
 	"type" | "mediaId" | "volume" | "id" | "name" | "sourceType" | "sourceUrl"
-> & { buffer: AudioBuffer };
+> & { buffer: AudioBuffer; playbackSpeed?: number };
 
 export function createAudioContext({ sampleRate }: { sampleRate?: number } = {}): AudioContext {
 	const AudioContextConstructor =
@@ -119,6 +119,7 @@ export async function collectAudioElements({
 							trimStart: element.trimStart,
 							trimEnd: element.trimEnd,
 							muted: elementMuted || isTrackMuted,
+							playbackSpeed: element.playbackSpeed,
 						};
 					}),
 				);
@@ -241,6 +242,7 @@ interface AudioMixSource {
 	duration: number;
 	trimStart: number;
 	trimEnd: number;
+	playbackSpeed?: number;
 }
 
 export interface AudioClipSource {
@@ -252,6 +254,7 @@ export interface AudioClipSource {
 	trimStart: number;
 	trimEnd: number;
 	muted: boolean;
+	playbackSpeed?: number;
 }
 
 async function fetchLibraryAudioSource({
@@ -320,9 +323,11 @@ async function fetchLibraryAudioClip({
 function collectMediaAudioSource({
 	element,
 	mediaAsset,
+	playbackSpeed,
 }: {
 	element: TimelineElement;
 	mediaAsset: MediaAsset;
+	playbackSpeed?: number;
 }): AudioMixSource {
 	return {
 		file: mediaAsset.file,
@@ -330,6 +335,7 @@ function collectMediaAudioSource({
 		duration: element.duration,
 		trimStart: element.trimStart,
 		trimEnd: element.trimEnd,
+		playbackSpeed,
 	};
 }
 
@@ -337,10 +343,12 @@ function collectMediaAudioClip({
 	element,
 	mediaAsset,
 	muted,
+	playbackSpeed,
 }: {
 	element: TimelineElement;
 	mediaAsset: MediaAsset;
 	muted: boolean;
+	playbackSpeed?: number;
 }): AudioClipSource {
 	return {
 		id: element.id,
@@ -351,6 +359,7 @@ function collectMediaAudioClip({
 		trimStart: element.trimStart,
 		trimEnd: element.trimEnd,
 		muted,
+		playbackSpeed,
 	};
 }
 
@@ -393,7 +402,11 @@ export async function collectAudioMixSources({
 
 				if (mediaSupportsAudio({ media: mediaAsset })) {
 					audioMixSources.push(
-						collectMediaAudioSource({ element, mediaAsset }),
+						collectMediaAudioSource({
+							element,
+							mediaAsset,
+							playbackSpeed: element.playbackSpeed,
+						}),
 					);
 				}
 			}
@@ -459,6 +472,7 @@ export async function collectAudioClips({
 							element,
 							mediaAsset,
 							muted,
+							playbackSpeed: element.playbackSpeed,
 						}),
 					);
 				}
@@ -531,13 +545,14 @@ function mixAudioChannels({
 	sampleRate: number;
 }): void {
 	const { buffer, startTime, trimStart, duration: elementDuration } = element;
+	const speed = element.playbackSpeed ?? 1;
 
 	const sourceStartSample = Math.floor(trimStart * buffer.sampleRate);
-	const sourceLengthSamples = Math.floor(elementDuration * buffer.sampleRate);
 	const outputStartSample = Math.floor(startTime * sampleRate);
+	const outputLengthForElement = Math.floor(elementDuration * sampleRate);
 
-	const resampleRatio = sampleRate / buffer.sampleRate;
-	const resampledLength = Math.floor(sourceLengthSamples * resampleRatio);
+	// With speed, each output sample maps to speed * (sampleRate ratio) source samples
+	const sourceAdvancePerOutputSample = (buffer.sampleRate * speed) / sampleRate;
 
 	const outputChannels = 2;
 	for (let channel = 0; channel < outputChannels; channel++) {
@@ -545,11 +560,12 @@ function mixAudioChannels({
 		const sourceChannel = Math.min(channel, buffer.numberOfChannels - 1);
 		const sourceData = buffer.getChannelData(sourceChannel);
 
-		for (let i = 0; i < resampledLength; i++) {
+		for (let i = 0; i < outputLengthForElement; i++) {
 			const outputIndex = outputStartSample + i;
 			if (outputIndex >= outputLength) break;
 
-			const sourceIndex = sourceStartSample + Math.floor(i / resampleRatio);
+			const sourceIndex =
+				sourceStartSample + Math.floor(i * sourceAdvancePerOutputSample);
 			if (sourceIndex >= sourceData.length) break;
 
 			outputData[outputIndex] += sourceData[sourceIndex];
