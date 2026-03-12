@@ -6,10 +6,13 @@ import { z } from "zod";
 
 // GET /api/projects — list projects for the logged-in user
 export async function GET() {
+	console.log("[projects] GET /api/projects");
 	const session = await getRequiredSession();
 	if (!session) {
+		console.log("[projects] No session — returning 401");
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
+	console.log("[projects] Authenticated: userId=%s, role=%s", session.user.id, session.user.role);
 
 	const isAdmin = session.user.role === "admin";
 
