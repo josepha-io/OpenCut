@@ -2,10 +2,8 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import type { KeyboardEvent, MouseEvent } from "react";
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
 import { MigrationDialog } from "@/components/editor/dialogs/migration-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -34,15 +32,15 @@ import {
 	Calendar04Icon,
 	GridViewIcon,
 	LeftToRightListDashIcon,
-	PlusSignIcon,
 	Search01Icon,
 	Video01Icon,
 	MoreHorizontalIcon,
 	Delete02Icon,
-	Copy01Icon,
 	Edit03Icon,
 	ArrowDown02Icon,
 	InformationCircleIcon,
+	CheckmarkCircle02Icon,
+	Clock04Icon,
 } from "@hugeicons/core-free-icons";
 import { OcVideoIcon } from "@opencut/ui/icons";
 import { Label } from "@/components/ui/label";
@@ -181,7 +179,6 @@ function ProjectsHeader() {
 
 				<div className="flex items-center gap-3 md:gap-4">
 					<SearchBar className="hidden md:block" />
-					<NewProjectButton />
 				</div>
 			</div>
 			<SearchBar className="block md:hidden mb-4" />
@@ -342,12 +339,6 @@ function SearchBar({
 
 const PROJECT_ACTIONS = [
 	{
-		id: "duplicate",
-		label: "Duplicate",
-		icon: Copy01Icon,
-		variant: "outline" as const,
-	},
-	{
 		id: "delete",
 		label: "Delete",
 		icon: Delete02Icon,
@@ -363,16 +354,6 @@ async function deleteProjects({
 	ids: string[];
 }) {
 	await editor.project.deleteProjects({ ids });
-}
-
-async function duplicateProjects({
-	editor,
-	ids,
-}: {
-	editor: ReturnType<typeof useEditor>;
-	ids: string[];
-}) {
-	await editor.project.duplicateProjects({ ids });
 }
 
 async function renameProject({
@@ -397,11 +378,6 @@ function ProjectActions() {
 		.filter((project) => selectedProjectIds.includes(project.id))
 		.map((project) => project.name);
 
-	const handleDuplicate = async () => {
-		await duplicateProjects({ editor, ids: selectedProjectIds });
-		clearSelectedProjects();
-	};
-
 	const handleDeleteClick = () => {
 		setIsDeleteDialogOpen(true);
 	};
@@ -413,7 +389,6 @@ function ProjectActions() {
 	};
 
 	const actionHandlers: Record<string, () => void> = {
-		duplicate: handleDuplicate,
 		delete: handleDeleteClick,
 	};
 
@@ -501,26 +476,20 @@ function SortDropdown({ children }: { children: React.ReactNode }) {
 	);
 }
 
-function NewProjectButton() {
-	const editor = useEditor();
-	const router = useRouter();
-
-	const handleCreateProject = async () => {
-		const projectId = await editor.project.createNewProject({
-			name: "New project",
-		});
-		router.push(`/editor/${projectId}`);
-	};
-
+function StatusBadge({ status }: { status?: string }) {
+	if (status === "done") {
+		return (
+			<span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+				<HugeiconsIcon icon={CheckmarkCircle02Icon} className="size-3" />
+				Done
+			</span>
+		);
+	}
 	return (
-		<Button
-			size="lg"
-			className="flex px-5 md:px-6"
-			onClick={handleCreateProject}
-		>
-			<span className="text-sm font-medium hidden md:block">New project</span>
-			<span className="text-sm font-medium block md:hidden">New</span>
-		</Button>
+		<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+			<HugeiconsIcon icon={Clock04Icon} className="size-3" />
+			To do
+		</span>
 	);
 }
 
@@ -550,11 +519,12 @@ function ProjectItem({
 	const isGridView = viewMode === "grid";
 
 	const handleRename = () => setIsRenameDialogOpen(true);
-	const handleDuplicate = async () => {
-		await duplicateProjects({ editor, ids: [project.id] });
-	};
 	const handleDeleteClick = () => setIsDeleteDialogOpen(true);
 	const handleInfoClick = () => setIsInfoDialogOpen(true);
+	const handleToggleStatus = async () => {
+		const newStatus = project.status === "done" ? "todo" : "done";
+		await editor.project.updateProjectStatus({ id: project.id, status: newStatus });
+	};
 	const handleDeleteConfirm = async () => {
 		await deleteProjects({ editor, ids: [project.id] });
 		setIsDeleteDialogOpen(false);
@@ -600,9 +570,12 @@ function ProjectItem({
 			</div>
 
 			<CardContent className="flex flex-col gap-2 px-0 pt-4">
-				<h3 className="group-hover:text-foreground/90 line-clamp-2 text-sm leading-snug font-medium">
-					{project.name}
-				</h3>
+				<div className="flex items-center justify-between gap-2">
+					<h3 className="group-hover:text-foreground/90 line-clamp-2 text-sm leading-snug font-medium">
+						{project.name}
+					</h3>
+					<StatusBadge status={project.status} />
+				</div>
 				<div className="text-muted-foreground flex items-center gap-1.5 text-sm">
 					<HugeiconsIcon icon={Calendar04Icon} className="size-4" />
 					<span>Created {formatDate({ date: project.createdAt })}</span>
@@ -631,6 +604,8 @@ function ProjectItem({
 			<h3 className="group-hover:text-foreground/90 text-sm font-medium truncate flex-1 min-w-0">
 				{project.name}
 			</h3>
+
+			<StatusBadge status={project.status} />
 
 			<span className="text-muted-foreground text-sm shrink-0 hidden sm:block">
 				{durationLabel ?? "—"}
@@ -670,10 +645,11 @@ function ProjectItem({
 					isOpen={isDropdownOpen}
 					onOpenChange={setIsDropdownOpen}
 					variant="list"
+					status={project.status}
 					onRenameClick={handleRename}
-					onDuplicateClick={handleDuplicate}
 					onDeleteClick={handleDeleteClick}
 					onInfoClick={handleInfoClick}
+					onToggleStatus={handleToggleStatus}
 				/>
 			)}
 		</div>
@@ -711,10 +687,11 @@ function ProjectItem({
 									<ProjectMenu
 										isOpen={isDropdownOpen}
 										onOpenChange={setIsDropdownOpen}
+										status={project.status}
 										onRenameClick={handleRename}
-										onDuplicateClick={handleDuplicate}
 										onDeleteClick={handleDeleteClick}
 										onInfoClick={handleInfoClick}
+										onToggleStatus={handleToggleStatus}
 									/>
 								)}
 							</>
@@ -724,10 +701,11 @@ function ProjectItem({
 					</div>
 				</ContextMenuTrigger>
 				<ProjectContextMenuContent
+					status={project.status}
 					onRenameClick={handleRename}
-					onDuplicateClick={handleDuplicate}
 					onDeleteClick={handleDeleteClick}
 					onInfoClick={handleInfoClick}
+					onToggleStatus={handleToggleStatus}
 				/>
 			</ContextMenu>
 
@@ -758,29 +736,31 @@ function ProjectItem({
 }
 
 function ProjectContextMenuContent({
+	status,
 	onRenameClick,
-	onDuplicateClick,
 	onDeleteClick,
 	onInfoClick,
+	onToggleStatus,
 }: {
+	status?: string;
 	onRenameClick: () => void;
-	onDuplicateClick: () => void;
 	onDeleteClick: () => void;
 	onInfoClick: () => void;
+	onToggleStatus: () => void;
 }) {
 	return (
 		<ContextMenuContent>
+			<ContextMenuItem
+				icon={<HugeiconsIcon icon={status === "done" ? Clock04Icon : CheckmarkCircle02Icon} />}
+				onClick={onToggleStatus}
+			>
+				{status === "done" ? "Mark as to do" : "Mark as done"}
+			</ContextMenuItem>
 			<ContextMenuItem
 				icon={<HugeiconsIcon icon={Edit03Icon} />}
 				onClick={onRenameClick}
 			>
 				Rename
-			</ContextMenuItem>
-			<ContextMenuItem
-				icon={<HugeiconsIcon icon={Copy01Icon} />}
-				onClick={onDuplicateClick}
-			>
-				Duplicate
 			</ContextMenuItem>
 			<ContextMenuItem
 				icon={<HugeiconsIcon icon={InformationCircleIcon} />}
@@ -804,18 +784,20 @@ function ProjectMenu({
 	isOpen,
 	onOpenChange,
 	variant = "grid",
+	status,
 	onRenameClick,
-	onDuplicateClick,
 	onDeleteClick,
 	onInfoClick,
+	onToggleStatus,
 }: {
 	isOpen: boolean;
 	onOpenChange: (open: boolean) => void;
 	variant?: "grid" | "list";
+	status?: string;
 	onRenameClick: () => void;
-	onDuplicateClick: () => void;
 	onDeleteClick: () => void;
 	onInfoClick: () => void;
+	onToggleStatus: () => void;
 }) {
 	const handleMenuClick = ({
 		event,
@@ -843,11 +825,6 @@ function ProjectMenu({
 		onOpenChange(false);
 	};
 
-	const handleDuplicate = () => {
-		onDuplicateClick();
-		onOpenChange(false);
-	};
-
 	const handleDeleteClick = () => {
 		onDeleteClick();
 		onOpenChange(false);
@@ -855,6 +832,11 @@ function ProjectMenu({
 
 	const handleInfoClick = () => {
 		onInfoClick();
+		onOpenChange(false);
+	};
+
+	const handleToggleStatus = () => {
+		onToggleStatus();
 		onOpenChange(false);
 	};
 
@@ -892,13 +874,13 @@ function ProjectMenu({
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent className="w-48" align="end">
+				<DropdownMenuItem onClick={handleToggleStatus}>
+					<HugeiconsIcon icon={status === "done" ? Clock04Icon : CheckmarkCircle02Icon} />
+					{status === "done" ? "Mark as to do" : "Mark as done"}
+				</DropdownMenuItem>
 				<DropdownMenuItem onClick={handleRename}>
 					<HugeiconsIcon icon={Edit03Icon} />
 					Rename
-				</DropdownMenuItem>
-				<DropdownMenuItem onClick={handleDuplicate}>
-					<HugeiconsIcon icon={Copy01Icon} />
-					Duplicate
 				</DropdownMenuItem>
 				<DropdownMenuItem onClick={handleInfoClick}>
 					<HugeiconsIcon icon={InformationCircleIcon} />
@@ -946,23 +928,8 @@ function ProjectsSkeleton() {
 
 function EmptyState() {
 	const { searchQuery, setSearchQuery } = useProjectsStore();
-	const router = useRouter();
 	const editor = useEditor();
 	const savedProjects = editor.project.getSavedProjects();
-
-	const handleCreateProject = async () => {
-		try {
-			const projectId = await editor.project.createNewProject({
-				name: "New project",
-			});
-			router.push(`/editor/${projectId}`);
-		} catch (error) {
-			toast.error("Failed to create project", {
-				description:
-					error instanceof Error ? error.message : "Please try again",
-			});
-		}
-	};
 
 	if (savedProjects.length > 0) {
 		return (
@@ -975,7 +942,7 @@ function EmptyState() {
 					<div className="flex flex-col items-center gap-3">
 						<h3 className="text-lg font-medium">No results found</h3>
 						<p className="text-muted-foreground max-w-md">
-							Your search for "{searchQuery}" did not return any results.
+							Your search for &quot;{searchQuery}&quot; did not return any results.
 						</p>
 					</div>
 				</div>
@@ -999,16 +966,11 @@ function EmptyState() {
 						className="text-muted-foreground size-8"
 					/>
 				</div>
-				<h3 className="text-lg font-medium">No projects yet</h3>
+				<h3 className="text-lg font-medium">No projects assigned</h3>
 				<p className="text-muted-foreground max-w-md">
-					Start creating your first project. Import media, edit, and export your
-					videos. All privately.
+					Projects will appear here once they are assigned to you.
 				</p>
 			</div>
-			<Button size="lg" className="gap-2" onClick={handleCreateProject}>
-				<HugeiconsIcon icon={PlusSignIcon} />
-				Create your first project
-			</Button>
 		</div>
 	);
 }

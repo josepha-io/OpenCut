@@ -1,0 +1,443 @@
+/**
+ * POST /api/webhooks/create-project
+ *
+ * Creates an OpenCut project from Airtable Content data.
+ * Called either by:
+ *   - The posting-bot hooks_server.py after /hooks/cut-content creates a Content record
+ *   - An Airtable automation when Content.hook is set
+ *
+ * Integration (Option A — chain in hooks_server.py):
+ *   After creating the Content record, add:
+ *     requests.post(
+ *       f"{OPENCUT_URL}/api/webhooks/create-project",
+ *       json={"mode": "airtable", "contentId": content_record_id},
+ *       headers={"Authorization": f"Bearer {OPENCUT_WEBHOOK_TOKEN}"},
+ *     )
+ *
+ * Integration (Option B — Airtable automation):
+ *   Trigger: When record matches conditions in Content table (hook is not empty)
+ *   Action: Send webhook POST to {OPENCUT_URL}/api/webhooks/create-project
+ *   Body: {"mode": "airtable", "contentId": "{Record ID}"}
+ *   Headers: Authorization: Bearer {OPENCUT_WEBHOOK_TOKEN}
+ */
+import { NextResponse, type NextRequest } from "next/server";
+import { z } from "zod";
+import { db, projects, projectMedia, users } from "@/lib/db";
+import { eq } from "drizzle-orm";
+import { webEnv } from "@opencut/env/web";
+import { getGCSBucket, getMediaPath } from "@/lib/gcs/client";
+import {
+	generateProject,
+	generateProjectFromFormat,
+	getFormatDefinition,
+} from "@/lib/project-generator";
+import {
+	fetchContentRecord,
+	fetchRawContentRecord,
+	updateContentRecord,
+} from "@/lib/airtable/client";
+
+// --- Auth ---
+
+function verifyWebhookAuth(request: NextRequest): boolean {
+	const token = webEnv.WEBHOOK_AUTH_TOKEN;
+	if (!token) return false;
+
+	const authHeader = request.headers.get("authorization");
+	if (!authHeader) return false;
+
+	const [scheme, value] = authHeader.split(" ");
+	return scheme === "Bearer" && value === token;
+}
+
+// --- Google Drive helpers ---
+
+function extractDriveFileId(driveLink: string): string | null {
+	// Handles: /file/d/FILE_ID/..., /open?id=FILE_ID, id=FILE_ID
+	const patterns = [
+		/\/file\/d\/([a-zA-Z0-9_-]+)/,
+		/[?&]id=([a-zA-Z0-9_-]+)/,
+	];
+	for (const pattern of patterns) {
+		const match = driveLink.match(pattern);
+		if (match) return match[1];
+	}
+	return null;
+}
+
+/**
+ * Get an OAuth2 access token from a service account key file.
+ * Uses the same key file as GCS storage.
+ */
+async function getServiceAccountToken(): Promise<string> {
+	const keyPath = webEnv.GOOGLE_APPLICATION_CREDENTIALS;
+	if (!keyPath) throw new Error("GOOGLE_APPLICATION_CREDENTIALS not set");
+
+	const fs = await import("node:fs");
+	const crypto = await import("node:crypto");
+	const keyFile = JSON.parse(fs.readFileSync(keyPath, "utf-8"));
+
+	const now = Math.floor(Date.now() / 1000);
+	const header = Buffer.from(
+		JSON.stringify({ alg: "RS256", typ: "JWT" }),
+	).toString("base64url");
+	const payload = Buffer.from(
+		JSON.stringify({
+			iss: keyFile.client_email,
+			scope: "https://www.googleapis.com/auth/drive.readonly",
+			aud: "https://oauth2.googleapis.com/token",
+			iat: now,
+			exp: now + 3600,
+		}),
+	).toString("base64url");
+
+	const signature = crypto
+		.sign("sha256", Buffer.from(`${header}.${payload}`), keyFile.private_key)
+		.toString("base64url");
+
+	const jwt = `${header}.${payload}.${signature}`;
+
+	const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+		method: "POST",
+		headers: { "Content-Type": "application/x-www-form-urlencoded" },
+		body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
+	});
+
+	if (!tokenResponse.ok) {
+		throw new Error(`Token exchange failed: ${await tokenResponse.text()}`);
+	}
+
+	const { access_token } = (await tokenResponse.json()) as {
+		access_token: string;
+	};
+	return access_token;
+}
+
+async function downloadFromGoogleDrive({
+	fileId,
+}: {
+	fileId: string;
+}): Promise<{ buffer: Buffer; contentType: string }> {
+	const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+	const token = await getServiceAccountToken();
+
+	const response = await fetch(url, {
+		headers: { Authorization: `Bearer ${token}` },
+	});
+
+	if (!response.ok) {
+		const body = await response.text();
+		throw new Error(
+			`Google Drive download failed (${response.status}): ${body}`,
+		);
+	}
+
+	const contentType =
+		response.headers.get("content-type") || "video/mp4";
+	const arrayBuffer = await response.arrayBuffer();
+	return { buffer: Buffer.from(arrayBuffer), contentType };
+}
+
+// --- Request schema ---
+
+/**
+ * The webhook accepts either:
+ * A) `contentId` only → fetches everything from Airtable
+ * B) Full payload with all data inline (for testing / non-Airtable callers)
+ */
+const webhookSchema = z.discriminatedUnion("mode", [
+	z.object({
+		mode: z.literal("airtable"),
+		contentId: z.string().min(1),
+		/** Assign to this user. Falls back to Airtable assigned_cutter_id lookup. */
+		assignToUserId: z.string().optional(),
+	}),
+	z.object({
+		mode: z.literal("inline"),
+		contentId: z.string().min(1),
+		format: z.string().min(1),
+		driveLink: z.string().min(1),
+		videoDuration: z.number().positive(),
+		videoWidth: z.number().int().positive().optional(),
+		videoHeight: z.number().int().positive().optional(),
+		hook: z.string().optional(),
+		hookStyle: z.record(z.unknown()).optional(),
+		hookDuration: z.number().positive().optional(),
+		hookStartTime: z.number().min(0).optional(),
+		textOverlays: z
+			.array(
+				z.object({
+					content: z.string(),
+					startTime: z.number().min(0),
+					endTime: z.number().positive(),
+					style: z.record(z.unknown()).optional(),
+				}),
+			)
+			.optional(),
+		assignToUserId: z.string().optional(),
+		canvasWidth: z.number().int().positive().optional(),
+		canvasHeight: z.number().int().positive().optional(),
+		fps: z.number().int().positive().optional(),
+		/** Field values for format-defined text overlays (e.g. { cta_text: "Shop now" }) */
+		fieldValues: z.record(z.string()).optional(),
+	}),
+]);
+
+// --- Main handler ---
+
+export async function POST(request: NextRequest) {
+	// 1. Auth
+	if (!verifyWebhookAuth(request)) {
+		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+	}
+
+	// 2. Parse
+	const body = await request.json();
+	const parsed = webhookSchema.safeParse(body);
+	if (!parsed.success) {
+		return NextResponse.json(
+			{ error: "Invalid request", details: parsed.error.flatten() },
+			{ status: 400 },
+		);
+	}
+
+	const data = parsed.data;
+
+	try {
+		// 3. Resolve input data
+		let contentId: string;
+		let format: string;
+		let driveLink: string;
+		let videoDuration: number;
+		let videoWidth: number | undefined;
+		let videoHeight: number | undefined;
+		let hook: string | undefined;
+		let hookStyle: Record<string, unknown> | undefined;
+		let hookDuration: number | undefined;
+		let hookStartTime: number | undefined;
+		let textOverlays: Array<{
+			content: string;
+			startTime: number;
+			endTime: number;
+			style?: Record<string, unknown>;
+		}> | undefined;
+		let assignToUserId: string | undefined;
+		let canvasWidth: number | undefined;
+		let canvasHeight: number | undefined;
+		let fps: number | undefined;
+
+		if (data.mode === "airtable") {
+			// Fetch from Airtable
+			const contentRecord = await fetchContentRecord({
+				recordId: data.contentId,
+			});
+			const fields = contentRecord.fields;
+
+			// Idempotency: skip if already created
+			if (fields.opencut_project_id) {
+				return NextResponse.json({
+					message: "Project already exists",
+					projectId: fields.opencut_project_id,
+					skipped: true,
+				});
+			}
+
+			// Get raw content for video info
+			const rawContentId = fields.raw_content_id?.[0];
+			if (!rawContentId) {
+				return NextResponse.json(
+					{ error: "Content record has no linked Raw Content" },
+					{ status: 400 },
+				);
+			}
+
+			const rawContentRecord = await fetchRawContentRecord({
+				recordId: rawContentId,
+			});
+			const rawFields = rawContentRecord.fields;
+
+			if (!rawFields.drive_link) {
+				return NextResponse.json(
+					{ error: "Raw Content has no drive_link" },
+					{ status: 400 },
+				);
+			}
+
+			contentId = data.contentId;
+			format = fields.format_name ?? "video";
+			driveLink = rawFields.drive_link;
+			videoDuration = rawFields.duration ?? 0;
+			videoWidth = rawFields.width;
+			videoHeight = rawFields.height;
+			hook = fields.hook;
+			hookStyle = fields.hook_style
+				? JSON.parse(fields.hook_style)
+				: undefined;
+			assignToUserId = data.assignToUserId;
+		} else {
+			// Inline mode
+			contentId = data.contentId;
+			format = data.format;
+			driveLink = data.driveLink;
+			videoDuration = data.videoDuration;
+			videoWidth = data.videoWidth;
+			videoHeight = data.videoHeight;
+			hook = data.hook;
+			hookStyle = data.hookStyle;
+			hookDuration = data.hookDuration;
+			hookStartTime = data.hookStartTime;
+			textOverlays = data.textOverlays as typeof textOverlays;
+			assignToUserId = data.assignToUserId;
+			canvasWidth = data.canvasWidth;
+			canvasHeight = data.canvasHeight;
+			fps = data.fps;
+		}
+
+		// 4. Extract Drive file ID
+		const driveFileId = extractDriveFileId(driveLink);
+		if (!driveFileId) {
+			return NextResponse.json(
+				{ error: "Could not extract file ID from drive_link" },
+				{ status: 400 },
+			);
+		}
+
+		// 5. Generate project — use format definition if available
+		const formatDef = getFormatDefinition({ format });
+		const fieldValues =
+			data.mode === "inline" ? data.fieldValues : undefined;
+
+		const { project, mediaId } = formatDef
+			? generateProjectFromFormat({
+					contentId,
+					formatDef,
+					hook,
+					videoDuration,
+					driveLink,
+					fieldValues,
+				})
+			: generateProject({
+					content: {
+						contentId,
+						format,
+						hook,
+						hookStyle: hookStyle as any,
+						hookDuration,
+						hookStartTime,
+						textOverlays: textOverlays as any,
+					},
+					rawContent: {
+						driveLink,
+						duration: videoDuration,
+						width: videoWidth,
+						height: videoHeight,
+					},
+					formatConfig:
+						canvasWidth && canvasHeight
+							? { canvasSize: { width: canvasWidth, height: canvasHeight }, fps }
+							: fps
+								? { fps }
+								: undefined,
+				});
+
+		// 6. Resolve assigned user
+		let resolvedUserId = assignToUserId;
+		if (!resolvedUserId) {
+			// Fall back to first user (dev convenience)
+			const [firstUser] = await db
+				.select({ id: users.id })
+				.from(users)
+				.limit(1);
+			resolvedUserId = firstUser?.id;
+		}
+
+		// 7. Insert project into DB
+		const projectData = {
+			scenes: project.scenes,
+			currentSceneId: project.currentSceneId,
+			settings: project.settings,
+			version: project.version,
+		};
+
+		await db.insert(projects).values({
+			id: project.metadata.id,
+			name: project.metadata.name,
+			status: "todo",
+			assignedUserId: resolvedUserId ?? null,
+			duration: project.metadata.duration,
+			data: projectData,
+			createdAt: new Date(project.metadata.createdAt),
+			updatedAt: new Date(project.metadata.updatedAt),
+		});
+
+		// 8. Download video from Google Drive
+		let videoUploaded = false;
+		try {
+			const { buffer, contentType } = await downloadFromGoogleDrive({
+				fileId: driveFileId,
+			});
+
+			// 9. Upload to GCS
+			const gcsPath = getMediaPath({
+				projectId: project.metadata.id,
+				mediaId,
+			});
+			const bucket = getGCSBucket();
+			const file = bucket.file(gcsPath);
+
+			await file.save(buffer, {
+				contentType,
+				resumable: buffer.length > 5 * 1024 * 1024,
+			});
+
+			// 10. Register media in DB
+			await db.insert(projectMedia).values({
+				id: mediaId,
+				projectId: project.metadata.id,
+				name: `${format}_video`,
+				type: "video",
+				size: buffer.length,
+				width: videoWidth ?? null,
+				height: videoHeight ?? null,
+				duration: Math.round(videoDuration),
+				gcsPath,
+			});
+
+			videoUploaded = true;
+		} catch (err) {
+			// Video download/upload failed — project is created but without media
+			console.error("Video transfer failed:", err);
+		}
+
+		// 11. Update Airtable if in airtable mode
+		if (data.mode === "airtable") {
+			try {
+				await updateContentRecord({
+					recordId: contentId,
+					fields: { opencut_project_id: project.metadata.id },
+				});
+			} catch (err) {
+				console.error("Failed to update Airtable:", err);
+			}
+		}
+
+		return NextResponse.json(
+			{
+				projectId: project.metadata.id,
+				mediaId,
+				videoUploaded,
+				name: project.metadata.name,
+			},
+			{ status: 201 },
+		);
+	} catch (err) {
+		console.error("Webhook create-project failed:", err);
+		return NextResponse.json(
+			{
+				error: "Internal server error",
+				message: err instanceof Error ? err.message : String(err),
+			},
+			{ status: 500 },
+		);
+	}
+}

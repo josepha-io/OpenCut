@@ -9,35 +9,18 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Progress } from "@/components/ui/progress";
-import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/utils/ui";
-import { getExportMimeType, getExportFileExtension, downloadBuffer } from "@/lib/export";
-import { Check, Copy, Download, RotateCcw } from "lucide-react";
-import {
-	EXPORT_FORMAT_VALUES,
-	EXPORT_QUALITY_VALUES,
-	type ExportFormat,
-	type ExportQuality,
-} from "@/types/export";
-import {
-	Section,
-	SectionContent,
-	SectionHeader,
-	SectionTitle,
-} from "@/components/editor/panels/properties/section";
+import { getExportMimeType, uploadExportedVideo } from "@/lib/export";
+import { Check, Copy, ExternalLink, RotateCcw, Upload } from "lucide-react";
 import { useEditor } from "@/hooks/use-editor";
-import { DEFAULT_EXPORT_OPTIONS } from "@/constants/export-constants";
 
-function isExportFormat(value: string): value is ExportFormat {
-	return EXPORT_FORMAT_VALUES.some((formatValue) => formatValue === value);
-}
+type UploadPhase = "idle" | "exporting" | "uploading" | "done" | "error";
 
-function isExportQuality(value: string): value is ExportQuality {
-	return EXPORT_QUALITY_VALUES.some((qualityValue) => qualityValue === value);
-}
+const USE_SERVER_STORAGE =
+	typeof window !== "undefined" &&
+	typeof process !== "undefined" &&
+	process.env.NEXT_PUBLIC_USE_SERVER_STORAGE === "true";
 
 export function ExportButton() {
 	const [isExportPopoverOpen, setIsExportPopoverOpen] = useState(false);
@@ -80,7 +63,9 @@ export function ExportButton() {
 					</div>
 				</button>
 			</PopoverTrigger>
-			{hasProject && <ExportPopover onOpenChange={setIsExportPopoverOpen} />}
+			{hasProject && (
+				<ExportPopover onOpenChange={setIsExportPopoverOpen} />
+			)}
 		</Popover>
 	);
 }
@@ -92,42 +77,69 @@ function ExportPopover({
 }) {
 	const editor = useEditor();
 	const activeProject = editor.project.getActive();
-	const { isExporting, progress, result: exportResult } =
-		editor.project.getExportState();
-	const [format, setFormat] = useState<ExportFormat>(
-		DEFAULT_EXPORT_OPTIONS.format,
-	);
-	const [quality, setQuality] = useState<ExportQuality>(
-		DEFAULT_EXPORT_OPTIONS.quality,
-	);
-	const [shouldIncludeAudio, setShouldIncludeAudio] = useState<boolean>(
-		DEFAULT_EXPORT_OPTIONS.includeAudio ?? true,
-	);
+	const { isExporting, progress } = editor.project.getExportState();
+	const [phase, setPhase] = useState<UploadPhase>("idle");
+	const [uploadError, setUploadError] = useState<string | null>(null);
+	const [driveLink, setDriveLink] = useState<string | null>(null);
 
-	const handleExport = async () => {
+	const handleExportAndUpload = async () => {
 		if (!activeProject) return;
 
+		setPhase("exporting");
+		setUploadError(null);
+
+		// 1. Render video — hardcoded MP4 High with audio
 		const result = await editor.project.export({
 			options: {
-			format,
-			quality,
-			fps: activeProject.settings.fps,
-			includeAudio: shouldIncludeAudio,
+				format: "mp4",
+				quality: "high",
+				fps: activeProject.settings.fps,
+				includeAudio: true,
 			},
 		});
 
 		if (result.cancelled) {
 			editor.project.clearExportState();
+			setPhase("idle");
 			return;
 		}
 
-		if (result.success && result.buffer) {
+		if (!result.success || !result.buffer) {
+			setPhase("error");
+			setUploadError(result.error || "Export failed");
+			return;
+		}
+
+		// 2. Upload to Google Drive (if server storage enabled)
+		if (USE_SERVER_STORAGE) {
+			setPhase("uploading");
+
+			const filename = `${activeProject.metadata.name}.mp4`;
+			try {
+				const uploadResult = await uploadExportedVideo({
+					buffer: result.buffer,
+					projectId: activeProject.metadata.id,
+					filename,
+					mimeType: getExportMimeType({ format: "mp4" }),
+				});
+
+				setDriveLink(uploadResult.driveViewLink);
+				setPhase("done");
+				editor.project.clearExportState();
+			} catch (err) {
+				setPhase("error");
+				setUploadError(
+					err instanceof Error ? err.message : "Upload failed",
+				);
+			}
+		} else {
+			// Fallback: browser download (original behavior)
+			const { downloadBuffer, getExportFileExtension } = await import("@/lib/export");
 			downloadBuffer({
 				buffer: result.buffer,
-				filename: `${activeProject.metadata.name}${getExportFileExtension({ format })}`,
-				mimeType: getExportMimeType({ format }),
+				filename: `${activeProject.metadata.name}${getExportFileExtension({ format: "mp4" })}`,
+				mimeType: getExportMimeType({ format: "mp4" }),
 			});
-
 			editor.project.clearExportState();
 			onOpenChange(false);
 		}
@@ -135,145 +147,111 @@ function ExportPopover({
 
 	const handleCancel = () => {
 		editor.project.cancelExport();
+		setPhase("idle");
+	};
+
+	const handleRetry = () => {
+		setUploadError(null);
+		setDriveLink(null);
+		handleExportAndUpload();
 	};
 
 	return (
 		<PopoverContent className="bg-background mr-4 flex w-80 flex-col p-0">
-			{exportResult && !exportResult.success ? (
-				<ExportError
-					error={exportResult.error || "Unknown error occurred"}
-					onRetry={handleExport}
-				/>
-			) : (
-				<>
-					<div className="flex items-center justify-between p-3 border-b">
-						<h3 className="font-medium text-sm">
-							{isExporting ? "Exporting project" : "Export project"}
-						</h3>
+			{/* Header */}
+			<div className="flex items-center justify-between p-3 border-b">
+				<h3 className="font-medium text-sm">
+					{phase === "idle" && "Export project"}
+					{phase === "exporting" && "Rendering video..."}
+					{phase === "uploading" && "Uploading to Drive..."}
+					{phase === "done" && "Export complete"}
+					{phase === "error" && "Export failed"}
+				</h3>
+			</div>
+
+			<div className="flex flex-col gap-4">
+				{/* Idle — single export button */}
+				{phase === "idle" && (
+					<div className="p-3">
+						<p className="text-muted-foreground text-xs mb-3">
+							Export as MP4 (High quality) with audio{USE_SERVER_STORAGE ? " and upload to Google Drive" : ""}.
+						</p>
+						<Button onClick={handleExportAndUpload} className="w-full gap-2">
+							<Upload className="size-4" />
+							{USE_SERVER_STORAGE ? "Export & Upload" : "Export"}
+						</Button>
 					</div>
+				)}
 
-					<div className="flex flex-col gap-4">
-						{!isExporting && (
-							<>
-								<div className="flex flex-col">
-									<Section collapsible defaultOpen={false} showTopBorder={false}>
-										<SectionHeader>
-											<SectionTitle>Format</SectionTitle>
-										</SectionHeader>
-										<SectionContent>
-											<RadioGroup
-												value={format}
-												onValueChange={(value) => {
-													if (isExportFormat(value)) {
-														setFormat(value);
-													}
-												}}
-											>
-												<div className="flex items-center space-x-2">
-													<RadioGroupItem value="mp4" id="mp4" />
-													<Label htmlFor="mp4">
-														MP4 (H.264) - Better compatibility
-													</Label>
-												</div>
-												<div className="flex items-center space-x-2">
-													<RadioGroupItem value="webm" id="webm" />
-													<Label htmlFor="webm">
-														WebM (VP9) - Smaller file size
-													</Label>
-												</div>
-											</RadioGroup>
-										</SectionContent>
-									</Section>
-
-									<Section collapsible defaultOpen={false}>
-										<SectionHeader>
-											<SectionTitle>Quality</SectionTitle>
-										</SectionHeader>
-										<SectionContent>
-											<RadioGroup
-												value={quality}
-												onValueChange={(value) => {
-													if (isExportQuality(value)) {
-														setQuality(value);
-													}
-												}}
-											>
-												<div className="flex items-center space-x-2">
-													<RadioGroupItem value="low" id="low" />
-													<Label htmlFor="low">Low - Smallest file size</Label>
-												</div>
-												<div className="flex items-center space-x-2">
-													<RadioGroupItem value="medium" id="medium" />
-													<Label htmlFor="medium">Medium - Balanced</Label>
-												</div>
-												<div className="flex items-center space-x-2">
-													<RadioGroupItem value="high" id="high" />
-													<Label htmlFor="high">High - Recommended</Label>
-												</div>
-												<div className="flex items-center space-x-2">
-													<RadioGroupItem value="very_high" id="very_high" />
-													<Label htmlFor="very_high">
-														Very high - Largest file size
-													</Label>
-												</div>
-											</RadioGroup>
-										</SectionContent>
-									</Section>
-
-									<Section collapsible defaultOpen={false}>
-										<SectionHeader>
-											<SectionTitle>Audio</SectionTitle>
-										</SectionHeader>
-										<SectionContent>
-											<div className="flex items-center space-x-2">
-												<Checkbox
-													id="include-audio"
-								checked={shouldIncludeAudio}
-												onCheckedChange={(checked) =>
-													setShouldIncludeAudio(!!checked)
-												}
-												/>
-												<Label htmlFor="include-audio">
-													Include audio in export
-												</Label>
-											</div>
-										</SectionContent>
-									</Section>
-								</div>
-
-								<div className="p-3 pt-0">
-									<Button onClick={handleExport} className="w-full gap-2">
-										<Download className="size-4" />
-										Export
-									</Button>
-								</div>
-							</>
-						)}
-
-						{isExporting && (
-							<div className="space-y-4 p-3">
-							<div className="flex flex-col gap-2">
-								<div className="flex items-center justify-between text-center">
-									<p className="text-muted-foreground text-sm">
-										{Math.round(progress * 100)}%
-									</p>
-									<p className="text-muted-foreground text-sm">100%</p>
-								</div>
-								<Progress value={progress * 100} className="w-full" />
+				{/* Exporting — progress bar */}
+				{(phase === "exporting" && isExporting) && (
+					<div className="space-y-4 p-3">
+						<div className="flex flex-col gap-2">
+							<div className="flex items-center justify-between text-center">
+								<p className="text-muted-foreground text-sm">
+									Rendering: {Math.round(progress * 100)}%
+								</p>
 							</div>
-
-								<Button
-									variant="outline"
-									className="w-full rounded-md"
-									onClick={handleCancel}
-								>
-									Cancel
-								</Button>
-							</div>
-						)}
+							<Progress value={progress * 100} className="w-full" />
+						</div>
+						<Button
+							variant="outline"
+							className="w-full rounded-md"
+							onClick={handleCancel}
+						>
+							Cancel
+						</Button>
 					</div>
-				</>
-			)}
+				)}
+
+				{/* Uploading — indeterminate progress */}
+				{phase === "uploading" && (
+					<div className="space-y-4 p-3">
+						<div className="flex flex-col gap-2">
+							<p className="text-muted-foreground text-sm">
+								Uploading to Google Drive...
+							</p>
+							<Progress className="w-full animate-pulse" value={100} />
+						</div>
+					</div>
+				)}
+
+				{/* Done — show Drive link */}
+				{phase === "done" && (
+					<div className="space-y-3 p-3">
+						<div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400">
+							<Check className="size-4" />
+							<span>Uploaded to Google Drive</span>
+						</div>
+						{driveLink && (
+							<a
+								href={driveLink}
+								target="_blank"
+								rel="noopener noreferrer"
+								className="flex items-center gap-2 text-sm text-blue-500 hover:underline"
+							>
+								<ExternalLink className="size-4" />
+								Open in Drive
+							</a>
+						)}
+						<Button
+							variant="outline"
+							className="w-full"
+							onClick={() => onOpenChange(false)}
+						>
+							Close
+						</Button>
+					</div>
+				)}
+
+				{/* Error */}
+				{phase === "error" && (
+					<ExportError
+						error={uploadError || "Unknown error"}
+						onRetry={handleRetry}
+					/>
+				)}
+			</div>
 		</PopoverContent>
 	);
 }

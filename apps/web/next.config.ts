@@ -12,7 +12,8 @@ const nextConfig: NextConfig = {
 		},
 	},
 	compiler: {
-		removeConsole: process.env.NODE_ENV === "production",
+		// Temporarily keep console for debugging Cloud Run deployment
+		// removeConsole: process.env.NODE_ENV === "production",
 	},
 	reactStrictMode: true,
 	productionBrowserSourceMaps: true,

@@ -287,6 +287,24 @@ export class ProjectManager {
 		}
 	}
 
+	async updateProjectStatus({
+		id,
+		status,
+	}: {
+		id: string;
+		status: "todo" | "done";
+	}): Promise<void> {
+		try {
+			await storageService.updateProjectStatus({ id, status });
+			this.savedProjects = this.savedProjects.map((p) =>
+				p.id === id ? { ...p, status } : p,
+			);
+			this.notify();
+		} catch (error) {
+			console.error("Failed to update project status:", error);
+		}
+	}
+
 	closeProject(): void {
 		this.active = null;
 		this.notify();
@@ -524,6 +542,13 @@ export class ProjectManager {
 		];
 
 		const sortedProjects = [...filteredProjects].sort((a, b) => {
+			// Always sort "todo" before "done"
+			const aStatus = a.status ?? "todo";
+			const bStatus = b.status ?? "todo";
+			if (aStatus !== bStatus) {
+				return aStatus === "todo" ? -1 : 1;
+			}
+
 			const aValue = a[key];
 			const bValue = b[key];
 

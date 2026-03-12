@@ -224,6 +224,16 @@ class StorageService {
 		);
 	}
 
+	async updateProjectStatus({
+		id,
+		status,
+	}: {
+		id: string;
+		status: "todo" | "done";
+	}): Promise<void> {
+		// No-op for client-side storage — status is server-only
+	}
+
 	async deleteProject({ id }: { id: string }): Promise<void> {
 		await this.projectsAdapter.remove(id);
 	}

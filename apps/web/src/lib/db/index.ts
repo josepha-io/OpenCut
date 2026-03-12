@@ -7,7 +7,20 @@ let _db: ReturnType<typeof drizzle> | null = null;
 
 function getDb() {
 	if (!_db) {
-		const client = postgres(webEnv.DATABASE_URL);
+		const connectionString = webEnv.DATABASE_URL;
+
+		// Cloud SQL on Cloud Run uses Unix sockets at /cloudsql/CONNECTION_NAME
+		// postgres.js needs the `host` option for Unix socket connections
+		const socketMatch = connectionString.match(
+			/\?host=(\/cloudsql\/[^\s&]+)/,
+		);
+
+		const client = socketMatch
+			? postgres(connectionString.split("?")[0], {
+					host: socketMatch[1],
+				})
+			: postgres(connectionString);
+
 		_db = drizzle(client, { schema });
 	}
 

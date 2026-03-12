@@ -15,11 +15,14 @@ export interface TCanvasSize {
 	height: number;
 }
 
+export type TProjectStatus = "todo" | "done";
+
 export interface TProjectMetadata {
 	id: string;
 	name: string;
 	thumbnail?: string;
 	duration: number;
+	status?: TProjectStatus;
 	createdAt: Date;
 	updatedAt: Date;
 }

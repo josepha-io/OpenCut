@@ -36,3 +36,43 @@ export function downloadBuffer({
 	document.body.removeChild(downloadLink);
 	URL.revokeObjectURL(url);
 }
+
+export async function uploadExportedVideo({
+	buffer,
+	projectId,
+	filename,
+	mimeType,
+}: {
+	buffer: ArrayBuffer;
+	projectId: string;
+	filename: string;
+	mimeType: string;
+}): Promise<{
+	driveFileId: string;
+	driveViewLink: string;
+	projectStatus: string;
+}> {
+	const blob = new Blob([buffer], { type: mimeType });
+	const file = new File([blob], filename, { type: mimeType });
+
+	const formData = new FormData();
+	formData.append("file", file);
+	formData.append("projectId", projectId);
+	formData.append("filename", filename);
+
+	const response = await fetch("/api/export/upload", {
+		method: "POST",
+		body: formData,
+		credentials: "include",
+	});
+
+	if (!response.ok) {
+		const errorData = await response.json().catch(() => ({}));
+		throw new Error(
+			(errorData as { message?: string }).message ??
+				`Upload failed (${response.status})`,
+		);
+	}
+
+	return response.json();
+}

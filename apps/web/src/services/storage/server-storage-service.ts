@@ -197,10 +197,24 @@ export class ServerStorageService {
 				name: row.name,
 				thumbnail: row.thumbnail ?? undefined,
 				duration: row.duration,
+				status: row.status as "todo" | "done",
 				createdAt: new Date(row.createdAt),
 				updatedAt: new Date(row.updatedAt),
 			}))
 			.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+	}
+
+	async updateProjectStatus({
+		id,
+		status,
+	}: {
+		id: string;
+		status: "todo" | "done";
+	}): Promise<void> {
+		await apiFetch(`/api/projects/${id}`, {
+			method: "PUT",
+			body: JSON.stringify({ status }),
+		});
 	}
 
 	async deleteProject({ id }: { id: string }): Promise<void> {

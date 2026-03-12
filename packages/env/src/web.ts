@@ -18,8 +18,8 @@ const webEnvSchema = z.object({
 		.or(z.string().startsWith("postgresql://")),
 
 	BETTER_AUTH_SECRET: z.string(),
-	UPSTASH_REDIS_REST_URL: z.url(),
-	UPSTASH_REDIS_REST_TOKEN: z.string(),
+	UPSTASH_REDIS_REST_URL: z.url().optional(),
+	UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
 	MARBLE_WORKSPACE_KEY: z.string(),
 	FREESOUND_CLIENT_ID: z.string(),
 	FREESOUND_API_KEY: z.string(),
@@ -32,6 +32,14 @@ const webEnvSchema = z.object({
 	// GCS Storage (optional — only needed for server-side project storage)
 	GCS_BUCKET_NAME: z.string().optional(),
 	GOOGLE_APPLICATION_CREDENTIALS: z.string().optional(),
+
+	// Webhook / Airtable (optional — only needed for auto project creation)
+	WEBHOOK_AUTH_TOKEN: z.string().optional(),
+	AIRTABLE_API_KEY: z.string().optional(),
+	AIRTABLE_BASE_ID: z.string().optional(),
+
+	// Google Drive export (optional — only needed for export-to-Drive flow)
+	GOOGLE_DRIVE_EXPORT_FOLDER_ID: z.string().optional(),
 });
 
 export type WebEnv = z.infer<typeof webEnvSchema>;
