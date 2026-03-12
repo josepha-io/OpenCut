@@ -186,15 +186,20 @@ const webhookSchema = z.discriminatedUnion("mode", [
 // --- Main handler ---
 
 export async function POST(request: NextRequest) {
+	console.log("[webhook] POST /api/webhooks/create-project");
+
 	// 1. Auth
 	if (!verifyWebhookAuth(request)) {
+		console.log("[webhook] Auth failed");
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
 	// 2. Parse
 	const body = await request.json();
+	console.log("[webhook] Request body:", JSON.stringify(body));
 	const parsed = webhookSchema.safeParse(body);
 	if (!parsed.success) {
+		console.log("[webhook] Validation failed:", JSON.stringify(parsed.error.flatten()));
 		return NextResponse.json(
 			{ error: "Invalid request", details: parsed.error.flatten() },
 			{ status: 400 },
@@ -204,6 +209,7 @@ export async function POST(request: NextRequest) {
 	const data = parsed.data;
 
 	try {
+		console.log("[webhook] Mode:", data.mode, "contentId:", data.contentId);
 		// 3. Resolve input data
 		let contentId: string;
 		let format: string;
@@ -228,10 +234,12 @@ export async function POST(request: NextRequest) {
 
 		if (data.mode === "airtable") {
 			// Fetch from Airtable
+			console.log("[webhook] Fetching Content record:", data.contentId);
 			const contentRecord = await fetchContentRecord({
 				recordId: data.contentId,
 			});
 			const fields = contentRecord.fields;
+			console.log("[webhook] Content fields:", JSON.stringify(fields));
 
 			// Idempotency: skip if already created
 			if (fields["OpenCut Project ID"]) {
@@ -251,10 +259,12 @@ export async function POST(request: NextRequest) {
 				);
 			}
 
+			console.log("[webhook] Fetching Raw Content record:", rawContentId);
 			const rawContentRecord = await fetchRawContentRecord({
 				recordId: rawContentId,
 			});
 			const rawFields = rawContentRecord.fields;
+			console.log("[webhook] Raw Content fields:", JSON.stringify(rawFields));
 
 			if (!rawFields.URL) {
 				return NextResponse.json(
@@ -293,14 +303,18 @@ export async function POST(request: NextRequest) {
 			fps = data.fps;
 		}
 
+		console.log("[webhook] Resolved: format=%s, driveLink=%s, duration=%s, hook=%s", format, driveLink, videoDuration, hook?.slice(0, 50));
+
 		// 4. Extract Drive file ID
 		const driveFileId = extractDriveFileId(driveLink);
 		if (!driveFileId) {
+			console.log("[webhook] Could not extract file ID from driveLink:", driveLink);
 			return NextResponse.json(
 				{ error: "Could not extract file ID from drive_link" },
 				{ status: 400 },
 			);
 		}
+		console.log("[webhook] Drive file ID:", driveFileId);
 
 		// 5. Generate project — use format definition if available
 		const formatDef = getFormatDefinition({ format });
@@ -359,6 +373,7 @@ export async function POST(request: NextRequest) {
 			version: project.version,
 		};
 
+		console.log("[webhook] Inserting project into DB: id=%s name=%s assignedTo=%s", project.metadata.id, project.metadata.name, resolvedUserId);
 		await db.insert(projects).values({
 			id: project.metadata.id,
 			name: project.metadata.name,
@@ -369,13 +384,16 @@ export async function POST(request: NextRequest) {
 			createdAt: new Date(project.metadata.createdAt),
 			updatedAt: new Date(project.metadata.updatedAt),
 		});
+		console.log("[webhook] Project inserted into DB");
 
 		// 8. Download video from Google Drive
 		let videoUploaded = false;
 		try {
+			console.log("[webhook] Downloading video from Drive: fileId=%s", driveFileId);
 			const { buffer, contentType } = await downloadFromGoogleDrive({
 				fileId: driveFileId,
 			});
+			console.log("[webhook] Downloaded %d bytes, contentType=%s", buffer.length, contentType);
 
 			// 9. Upload to GCS
 			const gcsPath = getMediaPath({
@@ -404,9 +422,10 @@ export async function POST(request: NextRequest) {
 			});
 
 			videoUploaded = true;
+			console.log("[webhook] Video uploaded to GCS and registered in DB");
 		} catch (err) {
 			// Video download/upload failed — project is created but without media
-			console.error("Video transfer failed:", err);
+			console.error("[webhook] Video transfer failed:", err);
 		}
 
 		// 11. Update Airtable if in airtable mode
@@ -431,7 +450,7 @@ export async function POST(request: NextRequest) {
 			{ status: 201 },
 		);
 	} catch (err) {
-		console.error("Webhook create-project failed:", err);
+		console.error("[webhook] create-project failed:", err);
 		return NextResponse.json(
 			{
 				error: "Internal server error",
