@@ -4,6 +4,8 @@ import { eq } from "drizzle-orm";
 import { getRequiredSession } from "@/lib/auth/session";
 import { z } from "zod";
 
+export const dynamic = "force-dynamic";
+
 // GET /api/projects — list projects for the logged-in user
 export async function GET() {
 	console.log("[projects] GET /api/projects");
