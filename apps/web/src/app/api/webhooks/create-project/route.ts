@@ -274,15 +274,22 @@ export async function POST(request: NextRequest) {
 			}
 
 			contentId = data.contentId;
-			format = fields["Format Name"] ?? "video";
+			// Format lookup field from Airtable
+			const formatArr = fields["Format (from Raw Content)"];
+			format = (Array.isArray(formatArr) ? formatArr[0] : formatArr) ?? "video";
 			driveLink = rawFields.URL;
 			videoDuration = rawFields.Duration ?? 0;
-			videoWidth = rawFields.Width;
-			videoHeight = rawFields.Height;
+			videoWidth = rawFields.Width ?? 1080;
+			videoHeight = rawFields.Height ?? 1920;
 			hook = fields.Hook;
-			hookStyle = fields["Hook Style"]
-				? JSON.parse(fields["Hook Style"])
-				: undefined;
+			if (fields["Hook Style"]) {
+				try {
+					hookStyle = JSON.parse(fields["Hook Style"]);
+				} catch {
+					// Hook Style is a plain text name, not JSON — ignore it
+					console.log("[webhook] Hook Style is not JSON, ignoring:", fields["Hook Style"]);
+				}
+			}
 			assignToUserId = data.assignToUserId;
 		} else {
 			// Inline mode

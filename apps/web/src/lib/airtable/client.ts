@@ -80,13 +80,15 @@ async function updateRecord({
 
 export interface ContentFields {
 	Hook?: string;
-	"Hook Style"?: string; // JSON string
+	"Hook Style"?: string; // Plain text name or JSON
 	Format?: string[];     // Linked record IDs
-	"Format Name"?: string; // Lookup field (from Format)
+	"Format (from Raw Content)"?: string[]; // Lookup field
 	"Raw Content"?: string[]; // Linked record IDs
 	"OpenCut Project ID"?: string;
 	"Assigned Cutter"?: string;
 	"Final Video"?: string; // Google Drive link to exported video
+	Video?: string;         // Google Drive link to raw video copy
+	"URL (from Raw Content)"?: string[]; // Lookup field
 }
 
 export async function fetchContentRecord({ recordId }: { recordId: string }) {
