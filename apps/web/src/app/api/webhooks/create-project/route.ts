@@ -234,16 +234,16 @@ export async function POST(request: NextRequest) {
 			const fields = contentRecord.fields;
 
 			// Idempotency: skip if already created
-			if (fields.opencut_project_id) {
+			if (fields["OpenCut Project ID"]) {
 				return NextResponse.json({
 					message: "Project already exists",
-					projectId: fields.opencut_project_id,
+					projectId: fields["OpenCut Project ID"],
 					skipped: true,
 				});
 			}
 
 			// Get raw content for video info
-			const rawContentId = fields.raw_content_id?.[0];
+			const rawContentId = fields["Raw Content"]?.[0];
 			if (!rawContentId) {
 				return NextResponse.json(
 					{ error: "Content record has no linked Raw Content" },
@@ -256,22 +256,22 @@ export async function POST(request: NextRequest) {
 			});
 			const rawFields = rawContentRecord.fields;
 
-			if (!rawFields.drive_link) {
+			if (!rawFields.URL) {
 				return NextResponse.json(
-					{ error: "Raw Content has no drive_link" },
+					{ error: "Raw Content has no URL" },
 					{ status: 400 },
 				);
 			}
 
 			contentId = data.contentId;
-			format = fields.format_name ?? "video";
-			driveLink = rawFields.drive_link;
-			videoDuration = rawFields.duration ?? 0;
-			videoWidth = rawFields.width;
-			videoHeight = rawFields.height;
-			hook = fields.hook;
-			hookStyle = fields.hook_style
-				? JSON.parse(fields.hook_style)
+			format = fields["Format Name"] ?? "video";
+			driveLink = rawFields.URL;
+			videoDuration = rawFields.Duration ?? 0;
+			videoWidth = rawFields.Width;
+			videoHeight = rawFields.Height;
+			hook = fields.Hook;
+			hookStyle = fields["Hook Style"]
+				? JSON.parse(fields["Hook Style"])
 				: undefined;
 			assignToUserId = data.assignToUserId;
 		} else {
@@ -414,7 +414,7 @@ export async function POST(request: NextRequest) {
 			try {
 				await updateContentRecord({
 					recordId: contentId,
-					fields: { opencut_project_id: project.metadata.id },
+					fields: { "OpenCut Project ID": project.metadata.id },
 				});
 			} catch (err) {
 				console.error("Failed to update Airtable:", err);

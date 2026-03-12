@@ -1,0 +1,21 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--platform'
+      - 'linux/amd64'
+      - '-f'
+      - 'apps/web/Dockerfile'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_SITE_URL=https://opencut-626496736543.europe-west1.run.app'
+      - '-t'
+      - '${_IMAGE}'
+      - '.'
+images:
+  - '${_IMAGE}'
+substitutions:
+  _IMAGE: europe-west1-docker.pkg.dev/josepha-dev/opencut/web:josepha-integration
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1200s

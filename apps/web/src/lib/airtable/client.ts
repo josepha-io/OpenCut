@@ -79,13 +79,13 @@ async function updateRecord({
 // --- Content record ---
 
 export interface ContentFields {
-	hook?: string;
-	hook_style?: string; // JSON string
-	format?: string[];   // Linked record IDs
-	format_name?: string; // Lookup field
-	raw_content_id?: string[]; // Linked record IDs
-	opencut_project_id?: string;
-	assigned_cutter_id?: string;
+	Hook?: string;
+	"Hook Style"?: string; // JSON string
+	Format?: string[];     // Linked record IDs
+	"Format Name"?: string; // Lookup field (from Format)
+	"Raw Content"?: string[]; // Linked record IDs
+	"OpenCut Project ID"?: string;
+	"Assigned Cutter"?: string;
 	"Final Video"?: string; // Google Drive link to exported video
 }
 
@@ -106,11 +106,11 @@ export async function updateContentRecord({
 // --- Raw Content record ---
 
 export interface RawContentFields {
-	drive_link?: string;
-	duration?: number;
-	width?: number;
-	height?: number;
-	fps?: number;
+	URL?: string;        // Google Drive link to raw video
+	Duration?: number;
+	Width?: number;
+	Height?: number;
+	FPS?: number;
 }
 
 export async function fetchRawContentRecord({ recordId }: { recordId: string }) {
