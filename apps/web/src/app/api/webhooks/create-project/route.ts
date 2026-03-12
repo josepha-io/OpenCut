@@ -66,48 +66,82 @@ function extractDriveFileId(driveLink: string): string | null {
 }
 
 /**
- * Get an OAuth2 access token from a service account key file.
- * Uses the same key file as GCS storage.
+ * Get an OAuth2 access token for Google APIs.
+ * - If GOOGLE_APPLICATION_CREDENTIALS is set: uses service account key file (local dev)
+ * - Otherwise: uses Application Default Credentials via metadata server (Cloud Run)
  */
-async function getServiceAccountToken(): Promise<string> {
+async function getServiceAccountToken(
+	scope = "https://www.googleapis.com/auth/drive.readonly",
+): Promise<string> {
 	const keyPath = webEnv.GOOGLE_APPLICATION_CREDENTIALS;
-	if (!keyPath) throw new Error("GOOGLE_APPLICATION_CREDENTIALS not set");
 
-	const fs = await import("node:fs");
-	const crypto = await import("node:crypto");
-	const keyFile = JSON.parse(fs.readFileSync(keyPath, "utf-8"));
+	if (keyPath) {
+		// Local dev: use key file
+		const fs = await import("node:fs");
+		const crypto = await import("node:crypto");
+		const keyFile = JSON.parse(fs.readFileSync(keyPath, "utf-8"));
 
-	const now = Math.floor(Date.now() / 1000);
-	const header = Buffer.from(
-		JSON.stringify({ alg: "RS256", typ: "JWT" }),
-	).toString("base64url");
-	const payload = Buffer.from(
-		JSON.stringify({
-			iss: keyFile.client_email,
-			scope: "https://www.googleapis.com/auth/drive.readonly",
-			aud: "https://oauth2.googleapis.com/token",
-			iat: now,
-			exp: now + 3600,
-		}),
-	).toString("base64url");
+		const now = Math.floor(Date.now() / 1000);
+		const header = Buffer.from(
+			JSON.stringify({ alg: "RS256", typ: "JWT" }),
+		).toString("base64url");
+		const payload = Buffer.from(
+			JSON.stringify({
+				iss: keyFile.client_email,
+				scope,
+				aud: "https://oauth2.googleapis.com/token",
+				iat: now,
+				exp: now + 3600,
+			}),
+		).toString("base64url");
 
-	const signature = crypto
-		.sign("sha256", Buffer.from(`${header}.${payload}`), keyFile.private_key)
-		.toString("base64url");
+		const signature = crypto
+			.sign(
+				"sha256",
+				Buffer.from(`${header}.${payload}`),
+				keyFile.private_key,
+			)
+			.toString("base64url");
 
-	const jwt = `${header}.${payload}.${signature}`;
+		const jwt = `${header}.${payload}.${signature}`;
 
-	const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded" },
-		body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
-	});
+		const tokenResponse = await fetch(
+			"https://oauth2.googleapis.com/token",
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/x-www-form-urlencoded",
+				},
+				body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
+			},
+		);
 
-	if (!tokenResponse.ok) {
-		throw new Error(`Token exchange failed: ${await tokenResponse.text()}`);
+		if (!tokenResponse.ok) {
+			throw new Error(
+				`Token exchange failed: ${await tokenResponse.text()}`,
+			);
+		}
+
+		const { access_token } = (await tokenResponse.json()) as {
+			access_token: string;
+		};
+		return access_token;
 	}
 
-	const { access_token } = (await tokenResponse.json()) as {
+	// Cloud Run: use metadata server for ADC
+	console.log("[webhook] Using metadata server for access token");
+	const metadataUrl = `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token`;
+	const response = await fetch(metadataUrl, {
+		headers: { "Metadata-Flavor": "Google" },
+	});
+
+	if (!response.ok) {
+		throw new Error(
+			`Metadata token fetch failed (${response.status}): ${await response.text()}`,
+		);
+	}
+
+	const { access_token } = (await response.json()) as {
 		access_token: string;
 	};
 	return access_token;
@@ -277,7 +311,15 @@ export async function POST(request: NextRequest) {
 			// Format lookup field from Airtable
 			const formatArr = fields["Format (from Raw Content)"];
 			format = (Array.isArray(formatArr) ? formatArr[0] : formatArr) ?? "video";
-			driveLink = rawFields.URL;
+			// Prefer the Video field (copy in editing folder) over raw content URL
+			driveLink = fields.Video || rawFields.URL;
+			if (!driveLink) {
+				return NextResponse.json(
+					{ error: "No video URL found (checked Video and Raw Content URL)" },
+					{ status: 400 },
+				);
+			}
+			console.log("[webhook] Using drive link from: %s", fields.Video ? "Content.Video" : "RawContent.URL");
 			videoDuration = rawFields.Duration ?? 0;
 			videoWidth = rawFields.Width ?? 1080;
 			videoHeight = rawFields.Height ?? 1920;
@@ -435,15 +477,17 @@ export async function POST(request: NextRequest) {
 			console.error("[webhook] Video transfer failed:", err);
 		}
 
-		// 11. Update Airtable if in airtable mode
+		// 11. Update Airtable if in airtable mode (best-effort, field may not exist yet)
 		if (data.mode === "airtable") {
 			try {
 				await updateContentRecord({
 					recordId: contentId,
 					fields: { "OpenCut Project ID": project.metadata.id },
 				});
+				console.log("[webhook] Airtable Content record updated with project ID");
 			} catch (err) {
-				console.error("Failed to update Airtable:", err);
+				// Field may not exist in Airtable yet — non-fatal
+				console.warn("[webhook] Failed to update Airtable (non-fatal):", err instanceof Error ? err.message : err);
 			}
 		}
 
